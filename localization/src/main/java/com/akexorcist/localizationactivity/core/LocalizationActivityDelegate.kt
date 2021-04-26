@@ -3,11 +3,12 @@ package com.akexorcist.localizationactivity.core
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.content.res.Resources
 import android.os.Build
 import android.os.Handler
 import android.os.LocaleList
-import com.akexorcist.localizationactivity.ui.BlankDummyActivity
+import android.os.Looper
 import java.util.*
 
 open class LocalizationActivityDelegate(val activity: Activity) {
@@ -34,39 +35,104 @@ open class LocalizationActivityDelegate(val activity: Activity) {
 
     // If activity is run to back stack. So we have to check if this activity is resume working.
     fun onResume(context: Context) {
-        Handler().post {
+        Handler(Looper.getMainLooper()).post {
             checkLocaleChange(context)
             checkAfterLocaleChanging()
         }
     }
 
     fun attachBaseContext(context: Context): Context {
-        return LocalizationUtility.applyLocalizationContext(context)
-    }
-
-    fun getApplicationContext(applicationContext: Context): Context {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            applicationContext
-        } else {
-            LocalizationUtility.applyLocalizationContext(applicationContext)
+        val locale = LanguageSetting.getLanguageWithDefault(
+            context,
+            LanguageSetting.getDefaultLanguage(context)
+        )
+        return when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> {
+                val localeList = LocaleList(locale)
+                LocaleList.setDefault(localeList)
+                val config = Configuration().apply {
+                    setLocale(locale)
+                    setLocales(localeList)
+                }
+                context.createConfigurationContext(config)
+            }
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 -> {
+                val config = Configuration().apply {
+                    setLocale(locale)
+                }
+                context.createConfigurationContext(config)
+            }
+            else -> {
+                val config = Configuration().apply {
+                    @Suppress("DEPRECATION")
+                    this.locale = locale
+                }
+                @Suppress("DEPRECATION")
+                context.resources.updateConfiguration(
+                    config,
+                    context.resources.displayMetrics
+                )
+                context
+            }
         }
     }
 
-    @Suppress("DEPRECATION")
+    fun updateConfigurationLocale(context: Context): Configuration {
+        val locale = LanguageSetting.getLanguageWithDefault(
+            context,
+            LanguageSetting.getDefaultLanguage(context)
+        )
+        return Configuration().apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val localeList = LocaleList(locale)
+                LocaleList.setDefault(localeList)
+                setLocale(locale)
+                setLocales(localeList)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                setLocale(locale)
+            }
+        }
+    }
+
+    fun getApplicationContext(applicationContext: Context): Context {
+        return LocalizationUtility.applyLocalizationContext(applicationContext)
+    }
+
     fun getResources(resources: Resources): Resources {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val locale = LanguageSetting.getLanguage(activity)
-            val config = resources.configuration
-            config.setLocale(locale)
-            val localeList = LocaleList(locale)
-            LocaleList.setDefault(localeList)
-            config.setLocales(localeList)
-            resources
-        } else {
-            val config = resources.configuration
-            config.locale = LanguageSetting.getLanguage(activity)
-            val metrics = resources.displayMetrics
-            Resources(activity.assets, metrics, config)
+        val locale = LanguageSetting.getLanguage(activity)
+        return when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+                val localeList = LocaleList(locale)
+                LocaleList.setDefault(localeList)
+                val config = Configuration().apply {
+                    setLocale(locale)
+                    setLocales(localeList)
+                    setLayoutDirection(locale)
+                }
+                activity.createConfigurationContext(config).resources
+            }
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Build.VERSION.SDK_INT <= Build.VERSION_CODES.P -> {
+                val localeList = LocaleList(locale)
+                LocaleList.setDefault(localeList)
+                resources.configuration.apply {
+                    setLocale(locale)
+                    setLocales(localeList)
+                    setLayoutDirection(locale)
+                }
+                resources
+            }
+            else -> {
+                val config = Configuration().apply {
+                    @Suppress("DEPRECATION")
+                    this.locale = locale
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                        setLayoutDirection(locale)
+                    }
+                }
+                @Suppress("DEPRECATION")
+                resources.updateConfiguration(config, resources.displayMetrics)
+                resources
+            }
         }
     }
 
@@ -82,25 +148,58 @@ open class LocalizationActivityDelegate(val activity: Activity) {
     }
 
     fun setLanguage(context: Context, newLocale: Locale) {
-        val oldLocale = LanguageSetting.getLanguageWithDefault(context, LanguageSetting.getDefaultLanguage(context))
+        val oldLocale = LanguageSetting.getLanguageWithDefault(
+            context,
+            LanguageSetting.getDefaultLanguage(context)
+        )
         if (!isCurrentLanguageSetting(newLocale, oldLocale)) {
             LanguageSetting.setLanguage(activity, newLocale)
             notifyLanguageChanged()
         }
     }
 
+    fun setLanguageWithoutNotification(context: Context, newLanguage: String) {
+        val locale = Locale(newLanguage)
+        setLanguageWithoutNotification(context, locale)
+    }
+
+    fun setLanguageWithoutNotification(context: Context, newLanguage: String, newCountry: String) {
+        val locale = Locale(newLanguage, newCountry)
+        setLanguageWithoutNotification(context, locale)
+    }
+
+    /**
+     * Change application language but without recreating it
+     */
+    fun setLanguageWithoutNotification(context: Context, newLocale: Locale) {
+
+        val oldLocale = LanguageSetting.getLanguageWithDefault(
+            context,
+            LanguageSetting.getDefaultLanguage(context)
+        )
+        if (!isCurrentLanguageSetting(newLocale, oldLocale)) {
+            LanguageSetting.setLanguage(activity, newLocale)
+            // Don't notifiy current activity notifyLanguageChanged()
+        }
+
+    }
+
     // Get current language
     fun getLanguage(context: Context): Locale {
-        return LanguageSetting.getLanguageWithDefault(context, LanguageSetting.getDefaultLanguage(context))
+        return LanguageSetting.getLanguageWithDefault(
+            context,
+            LanguageSetting.getDefaultLanguage(context)
+        )
     }
 
     // Check that bundle come from locale change.
     // If yes, bundle will be remove and set boolean flag to "true".
     private fun checkBeforeLocaleChanging() {
-        val isLocalizationChanged = activity.intent.getBooleanExtra(KEY_ACTIVITY_LOCALE_CHANGED, false)
+        val isLocalizationChanged =
+            activity.intent?.getBooleanExtra(KEY_ACTIVITY_LOCALE_CHANGED, false) ?: false
         if (isLocalizationChanged) {
             this.isLocalizationChanged = true
-            activity.intent.removeExtra(KEY_ACTIVITY_LOCALE_CHANGED)
+            activity.intent?.removeExtra(KEY_ACTIVITY_LOCALE_CHANGED)
         }
     }
 
@@ -122,14 +221,19 @@ open class LocalizationActivityDelegate(val activity: Activity) {
     // Let's take it change! (Using recreate method that available on API 11 or more.
     private fun notifyLanguageChanged() {
         sendOnBeforeLocaleChangedEvent()
+        if (activity.intent == null)
+            activity.intent = Intent()
+
         activity.intent.putExtra(KEY_ACTIVITY_LOCALE_CHANGED, true)
-        callDummyActivity()
         activity.recreate()
     }
 
     // Check if locale has change while this activity was run to back stack.
     private fun checkLocaleChange(context: Context) {
-        val oldLanguage = LanguageSetting.getLanguageWithDefault(context, LanguageSetting.getDefaultLanguage(context))
+        val oldLanguage = LanguageSetting.getLanguageWithDefault(
+            context,
+            LanguageSetting.getDefaultLanguage(context)
+        )
         if (!isCurrentLanguageSetting(currentLanguage, oldLanguage)) {
             isLocalizationChanged = true
             notifyLanguageChanged()
@@ -154,9 +258,5 @@ open class LocalizationActivityDelegate(val activity: Activity) {
         for (listener in localeChangedListeners) {
             listener.onAfterLocaleChanged()
         }
-    }
-
-    private fun callDummyActivity() {
-        activity.startActivity(Intent(activity, BlankDummyActivity::class.java))
     }
 }
